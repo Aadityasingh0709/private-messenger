@@ -1,0 +1,19 @@
+{
+  "name": "private-messenger-phase-1",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @secure-chat/server\" \"npm run dev -w @secure-chat/web\"",
+    "build": "npm run build -w @secure-chat/shared && npm run build -w @secure-chat/server && npm run build -w @secure-chat/web",
+    "typecheck": "npm run build -w @secure-chat/shared && npm run typecheck -w @secure-chat/server && npm run typecheck -w @secure-chat/web",
+    "seed": "tsx apps/server/src/seed.ts",
+    "test:e2e": "tsx apps/server/src/e2e-test.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.4",
+    "tsx": "^4.19.2"
+  }
+}
