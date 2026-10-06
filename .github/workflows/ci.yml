@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Build, Typecheck & E2E Test
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck all workspaces
+        run: npm run typecheck
+
+      - name: Build production bundles
+        run: npm run build
+
+      - name: Start server in background for E2E validation
+        env:
+          PORT: 4000
+          MONGODB_URI: mongodb://127.0.0.1:27017/secure_chat_ci
+          JWT_SECRET: ci-test-secret-key-at-least-32-chars-long-123456
+          CLIENT_ORIGIN: http://localhost:5173
+        run: |
+          npx tsx apps/server/src/index.ts &
+          sleep 4
+
+      - name: Run End-to-End integration tests
+        env:
+          PORT: 4000
+          MONGODB_URI: mongodb://127.0.0.1:27017/secure_chat_ci
+          JWT_SECRET: ci-test-secret-key-at-least-32-chars-long-123456
+          CLIENT_ORIGIN: http://localhost:5173
+        run: npm run test:e2e
