@@ -28,3 +28,9 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Private Media Storage
+storage/
+**/storage/
+uploads/
+**/uploads/

@@ -898,3 +898,314 @@ a:hover {
     padding: 10px 14px;
   }
 }
+
+/* ==========================================================================
+   Phase 2 Media Messaging, Attachment & Custom Media Viewer Styles
+   ========================================================================== */
+.composer-wrapper {
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-top: 1px solid var(--color-border);
+}
+
+.upload-progress-banner {
+  padding: 8px 20px;
+  background: var(--color-bg-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.upload-progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.upload-progress-track {
+  width: 100%;
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.upload-progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  transition: width 0.2s ease;
+}
+
+.btn-attach {
+  background: none;
+  border: none;
+  font-size: 19px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.btn-attach:hover:not(:disabled) {
+  background: var(--color-bg-subtle);
+  color: var(--color-primary);
+}
+
+.btn-attach:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bubble-media {
+  padding: 6px 6px 8px 6px !important;
+  max-width: 360px;
+}
+
+.bubble-media-wrapper {
+  position: relative;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.bubble-image-preview {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.bubble-image-preview:hover {
+  transform: scale(1.01);
+}
+
+.bubble-video-wrapper {
+  min-height: 160px;
+  background: #0f172a;
+}
+
+.bubble-video-preview {
+  width: 100%;
+  max-height: 280px;
+  display: block;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+}
+
+.video-play-badge {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.35);
+  gap: 6px;
+  transition: background 0.2s ease;
+}
+
+.bubble-video-wrapper:hover .video-play-badge {
+  background: rgba(15, 23, 42, 0.2);
+}
+
+.play-icon {
+  width: 44px;
+  height: 44px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  padding-left: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease;
+}
+
+.bubble-video-wrapper:hover .play-icon {
+  transform: scale(1.1);
+}
+
+.video-size-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.media-overlay-hint {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.bubble-media-wrapper:hover .media-overlay-hint {
+  opacity: 1;
+}
+
+.media-placeholder {
+  height: 180px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.media-load-error {
+  padding: 20px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.media-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(8px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.media-viewer-container {
+  display: flex;
+  flex-direction: column;
+  max-width: 92vw;
+  max-height: 92vh;
+  background: #0f172a;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.media-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: rgba(15, 23, 42, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  z-index: 10;
+}
+
+.media-viewer-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.media-viewer-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.media-viewer-sender {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.media-viewer-close-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #f8fafc;
+  font-size: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.media-viewer-close-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.media-viewer-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  min-height: 200px;
+  min-width: 280px;
+  max-width: 90vw;
+  max-height: 82vh;
+  position: relative;
+  background: #020617;
+}
+
+.media-viewer-image {
+  max-width: 88vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.media-viewer-video {
+  max-width: 88vw;
+  max-height: 80vh;
+  outline: none;
+  border-radius: 4px;
+}
+
+.media-viewer-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.media-viewer-error {
+  padding: 30px 24px;
+  text-align: center;
+  color: #f87171;
+  font-size: 14px;
+}
+
+.hidden {
+  display: none !important;
+}

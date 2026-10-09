@@ -1,10 +1,15 @@
-import { Router, type Response } from "express";
+import { Router, type Request, type Response } from "express";
 import argon2 from "argon2";
+import multer from "multer";
 import { Types } from "mongoose";
 import { conversationSchema, loginSchema, registerSchema } from "@secure-chat/shared";
 import { cookieOptions, requireAuth, signToken, type AuthRequest } from "./auth.js";
-import { Conversation, Message, User } from "./models.js";
+import { config } from "./config.js";
+import { Conversation, MediaAsset, Message, User } from "./models.js";
 import { accountDto, conversationDto, messageDto, userDto } from "./serializers.js";
+import { generateStorageKey, storage } from "./storage.js";
+import { validateMediaUpload } from "./mediaValidation.js";
+import { getIO } from "./socket.js";
 
 // Helper for Zod request validation
 const parse = <T>(schema: { safeParse: (value: unknown) => any }, value: unknown, res: Response): T | undefined => {
@@ -27,6 +32,26 @@ const conversationKey = (firstUserId: string, secondUserId: string) =>
 
 const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "code" in error && error.code === 11000;
+
+// Configure multer for memory buffer storage and size bounds
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: config.maxVideoSizeBytes }
+});
+
+const uploadMiddleware = (req: any, res: any, next: any) => {
+  upload.single("file")(req, res, (err: any) => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          error: `File size exceeds the maximum allowed limit (${Math.round(config.maxVideoSizeBytes / (1024 * 1024))}MB)`
+        });
+      }
+      return res.status(400).json({ error: err.message || "Failed to process media upload" });
+    }
+    next();
+  });
+};
 
 // ==========================================
 // Authentication Routes (/api/auth)
@@ -130,7 +155,10 @@ apiRouter.get("/conversations", async (req: AuthRequest, res, next) => {
   try {
     const items = await Conversation.find({ participants: req.userId })
       .populate("participants")
-      .populate("lastMessage")
+      .populate({
+        path: "lastMessage",
+        populate: { path: "mediaAsset" }
+      })
       .sort({ lastMessageAt: -1, updatedAt: -1 });
 
     res.json({ conversations: items.map(conversationDto) });
@@ -200,6 +228,7 @@ apiRouter.get("/conversations/:id/messages", async (req: AuthRequest, res, next)
     }
 
     const messages = await Message.find({ conversationId: conversation._id })
+      .populate("mediaAsset")
       .sort({ createdAt: -1, _id: -1 })
       .limit(200);
     messages.reverse();
@@ -211,6 +240,183 @@ apiRouter.get("/conversations/:id/messages", async (req: AuthRequest, res, next)
     );
 
     res.json({ messages: messages.map((m) => messageDto(m)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Upload a media message to a conversation
+apiRouter.post("/conversations/:id/media", uploadMiddleware, async (req: AuthRequest, res: Response, next) => {
+  let savedStorageKey: string | null = null;
+  try {
+    const conversation = await ownConversation(String(req.params.id), req.userId!);
+    if (!conversation) {
+      return res.status(404).json({ error: "Conversation not found or access denied" });
+    }
+
+    const file = req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ error: "No media file was uploaded" });
+    }
+
+    const validation = validateMediaUpload(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      config.maxImageSizeBytes,
+      config.maxVideoSizeBytes
+    );
+
+    if (!validation.valid || !validation.processedBuffer || !validation.mediaKind) {
+      return res.status(400).json({ error: validation.error ?? "Invalid media upload" });
+    }
+
+    const storageKey = generateStorageKey(validation.mediaKind, validation.extension ?? "bin");
+    await storage.save(storageKey, validation.processedBuffer);
+    savedStorageKey = storageKey;
+
+    const asset = await MediaAsset.create({
+      uploaderId: req.userId,
+      conversationId: conversation._id,
+      storageKey,
+      mimeType: validation.mimeType,
+      size: validation.processedBuffer.length,
+      originalName: validation.sanitizedFilename,
+      mediaKind: validation.mediaKind,
+      ...(validation.width ? { width: validation.width } : {}),
+      ...(validation.height ? { height: validation.height } : {})
+    });
+
+    const caption = typeof req.body.caption === "string" ? req.body.caption.trim().slice(0, 4000) : "";
+    const message = await Message.create({
+      conversationId: conversation._id,
+      senderId: req.userId,
+      text: caption,
+      type: validation.mediaKind,
+      mediaAssetId: asset._id,
+      status: "sent"
+    });
+
+    conversation.lastMessage = message._id;
+    conversation.lastMessageAt = message.createdAt;
+    await conversation.save();
+
+    // Persisted successfully: clear savedStorageKey so cleanup will not delete it
+    savedStorageKey = null;
+
+    (message as any).mediaAsset = asset;
+    const dto = messageDto(message);
+
+    // Broadcast new message in real time to conversation participants
+    const io = getIO();
+    if (io) {
+      for (const participant of conversation.participants) {
+        io.to(`user:${participant}`).emit("message:new", dto);
+      }
+    }
+
+    res.status(201).json({ message: dto });
+  } catch (err) {
+    if (savedStorageKey) {
+      await storage.delete(savedStorageKey).catch(() => {});
+    }
+    next(err);
+  }
+});
+
+// Helper to serve private media securely with participant check & HTTP byte-range requests
+const serveMedia = async (mediaId: string, userId: string, req: Request, res: Response) => {
+  if (!Types.ObjectId.isValid(mediaId)) {
+    return res.status(404).json({ error: "Media not found" });
+  }
+
+  const asset = await MediaAsset.findById(mediaId).select("+storageKey");
+  if (!asset) {
+    return res.status(404).json({ error: "Media not found" });
+  }
+
+  // Strict authorization: user must be participant in the conversation
+  const isParticipant = await Conversation.exists({
+    _id: asset.conversationId,
+    participants: userId
+  });
+  if (!isParticipant) {
+    return res.status(404).json({ error: "Media not found or access denied" });
+  }
+
+  const fileExists = await storage.exists(asset.storageKey);
+  if (!fileExists) {
+    return res.status(404).json({ error: "Media file unavailable" });
+  }
+
+  const totalSize = asset.size;
+  const rangeHeader = req.headers.range;
+
+  if (rangeHeader) {
+    const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+    if (!match) {
+      res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
+      return;
+    }
+
+    let start = match[1] ? parseInt(match[1], 10) : 0;
+    let end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
+
+    if (isNaN(start) || start >= totalSize || isNaN(end) || end < start) {
+      res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
+      return;
+    }
+    if (end >= totalSize) {
+      end = totalSize - 1;
+    }
+
+    const chunkSize = end - start + 1;
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Length", chunkSize);
+    res.setHeader("Content-Type", asset.mimeType);
+    res.setHeader("Content-Security-Policy", "default-src 'none'");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=86400");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(asset.originalName)}"`);
+
+    const stream = storage.createReadStream(asset.storageKey, { start, end });
+    stream.on("error", () => {
+      if (!res.headersSent) res.status(500).end();
+    });
+    stream.pipe(res);
+  } else {
+    res.status(200);
+    res.setHeader("Content-Length", totalSize);
+    res.setHeader("Content-Type", asset.mimeType);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Security-Policy", "default-src 'none'");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=86400");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(asset.originalName)}"`);
+
+    const stream = storage.createReadStream(asset.storageKey);
+    stream.on("error", () => {
+      if (!res.headersSent) res.status(500).end();
+    });
+    stream.pipe(res);
+  }
+};
+
+// Retrieve media in the context of a conversation
+apiRouter.get("/conversations/:id/media/:mediaId", async (req: AuthRequest, res: Response, next) => {
+  try {
+    await serveMedia(String(req.params.mediaId), req.userId!, req, res);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Retrieve media by media ID directly (still strictly authorized by conversation membership)
+apiRouter.get("/media/:mediaId", async (req: AuthRequest, res: Response, next) => {
+  try {
+    await serveMedia(String(req.params.mediaId), req.userId!, req, res);
   } catch (err) {
     next(err);
   }

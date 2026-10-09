@@ -10,6 +10,7 @@ import { UserSearch } from "./components/UserSearch";
 import { ChatList } from "./components/ChatList";
 import { MessageBubble } from "./components/MessageBubble";
 import { MessageComposer, TypingIndicator } from "./components/MessageComposer";
+import { MediaViewer } from "./components/MediaViewer";
 import { ProfileModal } from "./components/ProfileModal";
 import { EmptyState, ErrorBanner, LoadingSpinner } from "./components/States";
 
@@ -23,6 +24,12 @@ function ChatApp() {
   const [error, setError] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Custom Media Viewer Modal State
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerUrl, setViewerUrl] = useState("");
+  const [viewerType, setViewerType] = useState<"image" | "video">("image");
+  const [viewerTitle, setViewerTitle] = useState("");
 
   const socketRef = useRef<Socket>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -68,7 +75,7 @@ function ChatApp() {
       }
     });
 
-    // Incoming new message
+    // Incoming new message (text or media)
     socket.on("message:new", (m: MessageDto) => {
       setConversations((prev) => {
         const updated = prev.map((c) =>
@@ -165,6 +172,13 @@ function ChatApp() {
     }
   };
 
+  const handleOpenMedia = (url: string, type: "image" | "video", title?: string) => {
+    setViewerUrl(url);
+    setViewerType(type);
+    setViewerTitle(title ?? (type === "image" ? "Photo" : "Video"));
+    setViewerOpen(true);
+  };
+
   const handleLogout = async () => {
     try {
       await api.logout();
@@ -249,6 +263,7 @@ function ChatApp() {
                     key={m.id}
                     message={m}
                     isMine={m.senderId === me.id}
+                    onOpenMedia={handleOpenMedia}
                   />
                 ))
               )}
@@ -275,6 +290,16 @@ function ChatApp() {
         isOpen={profileOpen}
         onClose={() => setProfileOpen(false)}
         onLogout={handleLogout}
+      />
+
+      {/* Custom Media Viewer Modal */}
+      <MediaViewer
+        isOpen={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        mediaUrl={viewerUrl}
+        mediaType={viewerType}
+        title={viewerTitle}
+        senderName={otherUser?.name}
       />
     </main>
   );

@@ -19,7 +19,11 @@ const withSocketErrorHandling = <Args extends unknown[]>(
   });
 };
 
+let ioInstance: Server | null = null;
+export const getIO = (): Server | null => ioInstance;
+
 export const configureSockets = (io: Server) => {
+  ioInstance = io;
   // Authenticate socket connection via cookie or handshake auth
   io.use((socket, next) => {
     try {

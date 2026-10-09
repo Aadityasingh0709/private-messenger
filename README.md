@@ -1,41 +1,64 @@
-# Private Messenger — Phase 1
+# Private Messenger — Phase 2
 
-A web-based, one-to-one text messenger. This is the normal communication foundation for a future privacy-focused protected-media platform; Phase 1 does **not** provide end-to-end encryption, media handling, screenshot prevention, or anti-capture protection.
+A privacy-focused, one-to-one messaging platform with real-time text and media messaging (images & videos) and a custom in-app media viewer.
 
-## Stack
+> **Note**: Phase 2 preserves all Phase 1 authentication, real-time text chat, presence, and conversation features. It adds secure media upload, validation, private storage, byte-range video streaming, and an in-app viewer. It does **not** yet provide end-to-end encryption, screenshot prevention, or optical anti-capture protection (scheduled for future phases).
+
+## Technology Stack
 
 - `apps/web`: React, TypeScript, Vite, React Router, Socket.IO client
-- `apps/server`: Express, TypeScript, Socket.IO, MongoDB/Mongoose
-- `packages/shared`: request validation and DTO contracts shared by clients and API
+- `apps/server`: Express, TypeScript, Socket.IO, MongoDB/Mongoose, Multer
+- `packages/shared`: Shared Zod validation, MIME allowlists, and DTO contracts
 
-## Local setup
+## Local Setup
 
-1. Install Node.js 20+ and start a local MongoDB instance.
-2. Copy `.env.example` to `.env` and set a unique `JWT_SECRET` (at least 32 random characters). The server loads the root `.env` when run from the root; alternatively copy it into `apps/server/.env`.
-3. Copy `apps/web/.env.example` to `apps/web/.env` if the API is not at `http://localhost:4000`.
-4. Run `npm install`, then `npm run dev`.
-5. Open `http://localhost:5173`. Register two independent accounts in separate browser profiles to test realtime delivery.
+1. Install Node.js 20+ and ensure a local MongoDB instance is running.
+2. Copy `.env.example` to `.env` (or `apps/server/.env`) and verify settings:
+   ```env
+   MONGODB_URI=mongodb://127.0.0.1:27017/secure_chat
+   JWT_SECRET=replace-with-a-long-random-secret-at-least-32-characters
+   CLIENT_ORIGIN=http://localhost:5173
+   PORT=4000
+   MAX_IMAGE_SIZE_BYTES=10485760
+   MAX_VIDEO_SIZE_BYTES=104857600
+   MEDIA_STORAGE_DIR=storage/media
+   ```
+3. Run `npm install`.
+4. Run `npm run dev` to start both the backend API server (`http://localhost:4000`) and the web client (`http://localhost:5173`).
+5. Open `http://localhost:5173` in two browser profiles (or incognito) to test two-way realtime text and media communication.
 
-Use `npm run typecheck` and `npm run build` before deployment.
+## Validation & Verification
 
-## API and Socket contract
+- **Typecheck**: `npm run typecheck`
+- **Build**: `npm run build`
+- **End-to-End Tests**: `npm run test:e2e` (validates Phase 1 regression checks and Phase 2 media upload, streaming, security, and authorization checks).
 
-Cookie-authenticated HTTP endpoints are under `/api`: auth registration/login/logout, current user, user search, conversations, and per-conversation messages. The server verifies conversation participation before returning messages.
+## API & Socket Contracts
 
-Socket.IO authenticates from the same HttpOnly cookie. Events: `conversation:join`, `message:send` / `message:new`, `typing` / `typing:update`, and `presence:update`. Every sent message is validated and persisted before being emitted.
+### HTTP Endpoints
+- `POST /api/auth/register`, `/api/auth/login`, `/api/auth/logout`: Cookie-authenticated sessions.
+- `GET /api/me`: Authenticated user profile.
+- `GET /api/users?q=...`: User search (excluding emails).
+- `GET /api/conversations`: Conversation list with last-message preview (`Photo`, `Video`, or text).
+- `POST /api/conversations`: Initiate or retrieve conversation with a participant.
+- `GET /api/conversations/:id/messages`: Historical messages (text & media with populated metadata).
+- `POST /api/conversations/:id/media`: Multipart media upload (`file`, optional `caption`).
+- `GET /api/media/:mediaId` & `GET /api/conversations/:id/media/:mediaId`: Authenticated media retrieval with safe headers (`nosniff`, `CSP: default-src 'none'`) and HTTP byte-range support for video playback.
 
-## Data model
+### Socket.IO Events
+- Client to Server: `conversation:join`, `message:send`, `messages:read`, `typing`.
+- Server to Client: `message:new` (dispatches both text and media messages in real time), `messages:read`, `typing:update`, `presence:update`.
 
-- **User**: identity/profile fields, Argon2 password hash, presence and last-seen timestamp. Email addresses are returned only for the authenticated user's own account, not in search results or conversation participant data.
-- **Conversation**: exactly two participants, optional latest-message reference and timestamp.
-- **Message**: conversation and sender references, text, status, and a current `type: "text"` field. The type is intentionally the narrow extension point for future media message types.
+## Media Architecture & Security
 
-## Known Phase 1 limits
+- **Supported Formats**: JPEG, PNG, WebP for images (max 10MB); MP4, WebM for videos (max 100MB).
+- **Validation**: Magic byte signature inspection prevents extension/MIME spoofing. SVGs, HTML, and executables are rejected.
+- **Privacy & Storage**: Files are stored outside public directories using server-generated keys. Internal storage paths are never leaked to clients.
+- **Metadata Sanitization**: Location-bearing EXIF tags are stripped from images upon ingestion.
+- **Streaming**: Supports HTTP Range headers (`206 Partial Content`) for video scrubbing and progressive buffering.
+- **Custom Viewer**: Integrated modal component for fullscreen viewing of images and playback of videos with play/pause, seek, volume, and keyboard shortcuts (`Escape`).
 
-- No end-to-end encryption, media uploads, push notifications, paginated history (only the newest 200 messages are returned), email verification, password recovery, or message deletion/editing.
-- Read status is recorded when the participant loads a conversation. Socket-delivered messages show `sent`; a richer delivery/read receipt flow belongs in a later refinement.
-- HttpOnly cookie auth assumes the web app and API are configured with compatible HTTPS/CORS settings in production.
+## Project Documentation
 
-## Recommended Phase 2
-
-Build an upload pipeline with authenticated object storage, media metadata/validation, thumbnails, and a dedicated normal media viewer—keeping viewer and media-service APIs separate from the future protected viewer/protection engine.
+- [Project Vision](docs/PROJECT_VISION.md)
+- [Project Status](docs/PROJECT_STATUS.md)

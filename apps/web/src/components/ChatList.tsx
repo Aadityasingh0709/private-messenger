@@ -1,4 +1,4 @@
-import type { ConversationDto, PublicUser } from "@secure-chat/shared";
+import type { ConversationDto, MessageDto, PublicUser } from "@secure-chat/shared";
 import { Avatar } from "./Avatar";
 
 interface ChatItemProps {
@@ -17,6 +17,22 @@ function formatChatTime(dateStr?: string): string {
     return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function formatSnippet(lastMsg: MessageDto, currentUserId: string): string {
+  let content = "";
+  if (lastMsg.type === "image") {
+    content = lastMsg.text ? `📷 ${lastMsg.text}` : "📷 Photo";
+  } else if (lastMsg.type === "video") {
+    content = lastMsg.text ? `🎥 ${lastMsg.text}` : "🎥 Video";
+  } else {
+    content = lastMsg.text || "Message";
+  }
+
+  if (lastMsg.senderId === currentUserId) {
+    return `You: ${content}`;
+  }
+  return content;
 }
 
 export function ChatItem({
@@ -45,10 +61,7 @@ export function ChatItem({
         </div>
         <p className="chat-item-snippet muted">
           {lastMsg ? (
-            <>
-              {lastMsg.senderId === currentUser.id && <span className="snippet-prefix">You: </span>}
-              {lastMsg.text}
-            </>
+            formatSnippet(lastMsg, currentUser.id)
           ) : (
             <span className="snippet-empty">Tap to start conversation</span>
           )}
