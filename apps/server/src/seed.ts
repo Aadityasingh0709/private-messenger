@@ -4,7 +4,10 @@ import { config } from "./config.js";
 import { User, Conversation, Message } from "./models.js";
 
 async function seed() {
-  console.log("Connecting to MongoDB:", config.mongoUri);
+  if (config.isProduction) {
+    throw new Error("The demo seed script cannot run in production");
+  }
+  console.log("Connecting to MongoDB");
   await mongoose.connect(config.mongoUri);
 
   const demoPassword = "Password123!";

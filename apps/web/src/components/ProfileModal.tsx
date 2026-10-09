@@ -1,8 +1,8 @@
-import type { PublicUser } from "@secure-chat/shared";
+import type { AccountUser } from "@secure-chat/shared";
 import { Avatar } from "./Avatar";
 
 interface ProfileModalProps {
-  user: PublicUser;
+  user: AccountUser;
   isOpen: boolean;
   onClose: () => void;
   onLogout: () => void;

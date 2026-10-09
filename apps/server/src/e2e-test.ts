@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
 
-const API = "http://localhost:4000";
+const API = process.env.API_URL ?? "http://localhost:4000";
 
 async function runTest() {
   console.log("=== PHASE 1 END-TO-END VALIDATION TEST ===");
@@ -28,6 +28,7 @@ async function runTest() {
   const tokenAlice = cookieAlice.replace("token=", "");
   const { user: alice } = await resAlice.json();
   console.log("✓ Alice registered:", alice.id, alice.name);
+  if (!alice.email) throw new Error("Registration did not return the account email");
 
   // 2. Register Bob
   console.log("2. Registering Bob...");
@@ -72,19 +73,38 @@ async function runTest() {
   if (!foundUsers.some((u: any) => u.id === bob.id)) {
     throw new Error("Search did not return Bob");
   }
+  if (foundUsers.some((u: any) => "email" in u)) {
+    throw new Error("User search exposed an account email address");
+  }
   console.log("✓ User search verified: found Bob");
 
-  // 5. Create Conversation: Alice starts conversation with Bob
+  // 5. Concurrent conversation requests must resolve to the same conversation
   console.log("5. Alice starting conversation with Bob...");
-  const resConv = await fetch(`${API}/api/conversations`, {
+  const createConversation = () => fetch(`${API}/api/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookieAlice },
     body: JSON.stringify({ userId: bob.id })
   });
-  const { conversation } = await resConv.json();
-  console.log("✓ Conversation created:", conversation.id);
+  const [resConv, resDuplicateConv] = await Promise.all([
+    createConversation(),
+    createConversation()
+  ]);
+  if (!resConv.ok || !resDuplicateConv.ok) {
+    throw new Error(`Conversation creation failed: ${resConv.status}, ${resDuplicateConv.status}`);
+  }
+  const [{ conversation }, { conversation: duplicateConversation }] = await Promise.all([
+    resConv.json(),
+    resDuplicateConv.json()
+  ]);
+  if (conversation.id !== duplicateConversation.id) {
+    throw new Error("Concurrent requests created duplicate conversations");
+  }
+  if (conversation.participants.some((participant: any) => "email" in participant)) {
+    throw new Error("Conversation participant data exposed an account email address");
+  }
+  console.log("✓ Concurrent requests resolved to one conversation:", conversation.id);
 
-  // 6. Connect Sockets for Alice and Bob
+  // 6. Connect authenticated sockets for Alice, Bob, and Mallory
   console.log("6. Connecting Socket.IO clients for Alice and Bob...");
   const socketAlice = io(API, {
     auth: { token: tokenAlice },
@@ -94,14 +114,18 @@ async function runTest() {
     auth: { token: tokenBob },
     extraHeaders: { Cookie: cookieBob }
   });
-
-  await new Promise<void>((resolve) => {
-    let connected = 0;
-    const check = () => { if (++connected === 2) resolve(); };
-    socketAlice.on("connect", check);
-    socketBob.on("connect", check);
+  const socketMallory = io(API, {
+    auth: { token: cookieMallory.replace("token=", "") },
+    extraHeaders: { Cookie: cookieMallory }
   });
-  console.log("✓ Both Socket.IO clients connected and authenticated");
+
+  await Promise.all([socketAlice, socketBob, socketMallory].map((socket) =>
+    new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("connect_error", reject);
+    })
+  ));
+  console.log("✓ All three Socket.IO clients connected and authenticated");
 
   // 7. Join conversation rooms
   await new Promise<void>((resolve) => {
@@ -111,6 +135,12 @@ async function runTest() {
       });
     });
   });
+  const unauthorizedJoin = await new Promise<any>((resolve) => {
+    socketMallory.emit("conversation:join", conversation.id, resolve);
+  });
+  if (!unauthorizedJoin?.error) {
+    throw new Error("Unauthorized user joined a conversation socket room");
+  }
   console.log("✓ Both joined conversation room");
 
   // 8. Real-time messaging: Alice sends to Bob
@@ -130,6 +160,17 @@ async function runTest() {
 
   const bobReceived = await bobReceivedPromise;
   console.log("✓ Bob received Alice's message in real time:", bobReceived.text);
+
+  const unauthorizedSend = await new Promise<any>((resolve) => {
+    socketMallory.emit("message:send", {
+      conversationId: conversation.id,
+      text: "Unauthorized message"
+    }, resolve);
+  });
+  if (!unauthorizedSend?.error) {
+    throw new Error("Unauthorized user sent a message to a conversation");
+  }
+  console.log("✓ Unauthorized socket room join and message send were rejected");
 
   // 9. Typing indicator test
   console.log("9. Testing typing indicator...");
@@ -169,6 +210,7 @@ async function runTest() {
   // Clean up sockets
   socketAlice.disconnect();
   socketBob.disconnect();
+  socketMallory.disconnect();
 
   console.log("\n==========================================");
   console.log("🎉 ALL PHASE 1 CORE REQUIREMENTS VERIFIED!");

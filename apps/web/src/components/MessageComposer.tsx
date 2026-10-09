@@ -1,5 +1,6 @@
 import { useState, useRef, type FormEvent, type KeyboardEvent } from "react";
 import type { Socket } from "socket.io-client";
+import { ErrorBanner } from "./States";
 
 interface MessageComposerProps {
   conversationId: string;
@@ -9,6 +10,8 @@ interface MessageComposerProps {
 
 export function MessageComposer({ conversationId, socket, onSent }: MessageComposerProps) {
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
   const typingTimer = useRef<number>();
 
   const emitTyping = (isTyping: boolean) => {
@@ -29,22 +32,29 @@ export function MessageComposer({ conversationId, socket, onSent }: MessageCompo
     if (e) e.preventDefault();
     const cleanText = text.trim();
     if (!cleanText) return;
+    if (sending) return;
+    if (!socket?.connected) {
+      setError("Not connected. Your message has not been sent.");
+      return;
+    }
 
-    socket?.emit(
+    setError("");
+    setSending(true);
+    window.clearTimeout(typingTimer.current);
+    socket.timeout(5000).emit(
       "message:send",
       { conversationId, text: cleanText },
-      (res: { error?: string }) => {
-        if (res?.error) {
-          alert(`Could not send message: ${res.error}`);
+      (timeoutError: Error | null, res?: { error?: string }) => {
+        setSending(false);
+        if (timeoutError || res?.error || !res) {
+          setError(res?.error ?? "Message could not be sent. Please try again.");
         } else {
+          setText((current) => current === cleanText ? "" : current);
+          emitTyping(false);
           onSent?.();
         }
       }
     );
-
-    setText("");
-    window.clearTimeout(typingTimer.current);
-    emitTyping(false);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -61,6 +71,7 @@ export function MessageComposer({ conversationId, socket, onSent }: MessageCompo
         className="composer-input"
         placeholder="Type a message…"
         value={text}
+        disabled={sending}
         onChange={(e) => handleChange(e.target.value)}
         onKeyDown={handleKeyDown}
         maxLength={4000}
@@ -68,11 +79,12 @@ export function MessageComposer({ conversationId, socket, onSent }: MessageCompo
       <button
         type="submit"
         className="btn-primary composer-send-btn"
-        disabled={!text.trim()}
+        disabled={!text.trim() || sending}
         title="Send message"
       >
-        Send
+        {sending ? "Sending…" : "Send"}
       </button>
+      {error && <ErrorBanner message={error} />}
     </form>
   );
 }

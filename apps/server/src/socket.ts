@@ -4,6 +4,21 @@ import { verifyToken } from "./auth.js";
 import { Conversation, Message, User } from "./models.js";
 import { messageDto } from "./serializers.js";
 
+type SocketAck = (response: { ok?: boolean; error?: string; details?: unknown; message?: ReturnType<typeof messageDto> }) => void;
+
+const withSocketErrorHandling = <Args extends unknown[]>(
+  eventName: string,
+  handler: (...args: Args) => Promise<void>
+) => (...args: Args) => {
+  void handler(...args).catch((error: unknown) => {
+    console.error(`Socket event '${eventName}' failed`, error);
+    const ack = args[args.length - 1];
+    if (typeof ack === "function") {
+      (ack as SocketAck)({ error: "Unable to process socket event" });
+    }
+  });
+};
+
 export const configureSockets = (io: Server) => {
   // Authenticate socket connection via cookie or handshake auth
   io.use((socket, next) => {
@@ -24,19 +39,23 @@ export const configureSockets = (io: Server) => {
     socket.join(`user:${userId}`);
 
     // Update presence to online
-    await User.findByIdAndUpdate(userId, { online: true });
-    io.emit("presence:update", { userId, online: true });
+    try {
+      await User.findByIdAndUpdate(userId, { online: true });
+      io.emit("presence:update", { userId, online: true });
+    } catch (error) {
+      console.error("Socket presence update failed", error);
+    }
 
     // Join a conversation room (with participant authorization check)
-    socket.on("conversation:join", async (conversationId: string, ack?: (v: any) => void) => {
+    socket.on("conversation:join", withSocketErrorHandling("conversation:join", async (conversationId: string, ack?: SocketAck) => {
       const conversation = await Conversation.findOne({ _id: conversationId, participants: userId });
       if (!conversation) return ack?.({ error: "Conversation not found or unauthorized" });
       socket.join(`conversation:${conversationId}`);
       ack?.({ ok: true });
-    });
+    }));
 
     // Send message (authenticated, validated, persisted to MongoDB)
-    socket.on("message:send", async (payload: unknown, ack?: (v: any) => void) => {
+    socket.on("message:send", withSocketErrorHandling("message:send", async (payload: unknown, ack?: SocketAck) => {
       const parsed = messageSchema.safeParse(payload);
       if (!parsed.success) return ack?.({ error: "Invalid message payload", details: parsed.error.flatten() });
 
@@ -63,10 +82,10 @@ export const configureSockets = (io: Server) => {
       }
 
       ack?.({ message: dto });
-    });
+    }));
 
     // Mark messages as read in conversation
-    socket.on("messages:read", async (conversationId: string) => {
+    socket.on("messages:read", withSocketErrorHandling("messages:read", async (conversationId: string) => {
       const conversation = await Conversation.findOne({ _id: conversationId, participants: userId });
       if (!conversation) return;
 
@@ -80,10 +99,10 @@ export const configureSockets = (io: Server) => {
           io.to(`user:${participant}`).emit("messages:read", { conversationId, readerId: userId });
         }
       }
-    });
+    }));
 
     // Typing indicators
-    socket.on("typing", async (payload: unknown) => {
+    socket.on("typing", withSocketErrorHandling("typing", async (payload: unknown) => {
       const parsed = typingSchema.safeParse(payload);
       if (!parsed.success) return;
 
@@ -94,10 +113,10 @@ export const configureSockets = (io: Server) => {
           userId
         });
       }
-    });
+    }));
 
     // Disconnect and presence handling
-    socket.on("disconnect", async () => {
+    socket.on("disconnect", withSocketErrorHandling("disconnect", async () => {
       const userSockets = await io.in(`user:${userId}`).fetchSockets();
       if (!userSockets.length) {
         const lastSeen = new Date();
@@ -108,6 +127,6 @@ export const configureSockets = (io: Server) => {
           lastSeen: lastSeen.toISOString()
         });
       }
-    });
+    }));
   });
 };

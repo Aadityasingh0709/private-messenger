@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { io, type Socket } from "socket.io-client";
-import type { ConversationDto, MessageDto, PublicUser } from "@secure-chat/shared";
+import type { AccountUser, ConversationDto, MessageDto, PublicUser } from "@secure-chat/shared";
 import { api } from "./api";
 import { AuthForm } from "./components/AuthForm";
 import { Avatar } from "./components/Avatar";
@@ -15,7 +15,7 @@ import { EmptyState, ErrorBanner, LoadingSpinner } from "./components/States";
 
 function ChatApp() {
   const navigate = useNavigate();
-  const [me, setMe] = useState<PublicUser>();
+  const [me, setMe] = useState<AccountUser>();
   const [conversations, setConversations] = useState<ConversationDto[]>([]);
   const [selected, setSelected] = useState<ConversationDto>();
   const [messages, setMessages] = useState<MessageDto[]>([]);
@@ -26,6 +26,8 @@ function ChatApp() {
 
   const socketRef = useRef<Socket>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const selectedConversationIdRef = useRef<string>();
+  const conversationLoadIdRef = useRef(0);
 
   // Initial user profile & conversation list loading
   const loadInitialData = async () => {
@@ -57,6 +59,15 @@ function ChatApp() {
     });
     socketRef.current = socket;
 
+    socket.on("connect", () => {
+      const conversationId = selectedConversationIdRef.current;
+      if (conversationId) {
+        socket.emit("conversation:join", conversationId, (response?: { error?: string }) => {
+          if (response?.error) setError(response.error);
+        });
+      }
+    });
+
     // Incoming new message
     socket.on("message:new", (m: MessageDto) => {
       setConversations((prev) => {
@@ -70,7 +81,7 @@ function ChatApp() {
         );
       });
 
-      if (selected?.id === m.conversationId) {
+      if (selectedConversationIdRef.current === m.conversationId) {
         setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
         // If the other participant sent it and chat is open, acknowledge read
         if (m.senderId !== me.id) {
@@ -81,7 +92,7 @@ function ChatApp() {
 
     // Realtime read receipts
     socket.on("messages:read", ({ conversationId }: { conversationId: string }) => {
-      if (selected?.id === conversationId) {
+      if (selectedConversationIdRef.current === conversationId) {
         setMessages((prev) =>
           prev.map((msg) => (msg.senderId === me.id ? { ...msg, status: "read" } : msg))
         );
@@ -90,7 +101,7 @@ function ChatApp() {
 
     // Realtime typing indicators
     socket.on("typing:update", (payload: { conversationId: string; userId: string; isTyping: boolean }) => {
-      if (payload.conversationId === selected?.id && payload.userId !== me.id) {
+      if (payload.conversationId === selectedConversationIdRef.current && payload.userId !== me.id) {
         setTyping(payload.isTyping);
       }
     });
@@ -110,7 +121,7 @@ function ChatApp() {
     return () => {
       socket.disconnect();
     };
-  }, [me?.id, selected?.id]);
+  }, [me?.id]);
 
   // Auto-scroll messages container to bottom on new message or typing
   useEffect(() => {
@@ -119,16 +130,23 @@ function ChatApp() {
 
   // Open a conversation and load history
   const openConversation = async (conversation: ConversationDto) => {
+    const loadId = ++conversationLoadIdRef.current;
+    selectedConversationIdRef.current = conversation.id;
     setSelected(conversation);
+    setMessages([]);
     setTyping(false);
     setError("");
 
     try {
       const response = await api.messages(conversation.id);
+      if (loadId !== conversationLoadIdRef.current) return;
       setMessages(response.messages);
-      socketRef.current?.emit("conversation:join", conversation.id);
+      socketRef.current?.emit("conversation:join", conversation.id, (response?: { error?: string }) => {
+        if (response?.error) setError(response.error);
+      });
       socketRef.current?.emit("messages:read", conversation.id);
     } catch (err) {
+      if (loadId !== conversationLoadIdRef.current) return;
       setError(err instanceof Error ? err.message : "Could not load messages");
     }
   };
@@ -199,7 +217,13 @@ function ChatApp() {
               <button
                 type="button"
                 className="btn-back-mobile"
-                onClick={() => setSelected(undefined)}
+                onClick={() => {
+                  conversationLoadIdRef.current += 1;
+                  selectedConversationIdRef.current = undefined;
+                  setSelected(undefined);
+                  setMessages([]);
+                  setTyping(false);
+                }}
                 aria-label="Back to conversations"
               >
                 ←

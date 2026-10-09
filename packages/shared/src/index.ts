@@ -11,6 +11,7 @@ export const messageSchema = z.object({ conversationId: z.string().regex(/^[a-f\
 export const conversationSchema = z.object({ userId: z.string().regex(/^[a-f\d]{24}$/i) });
 export const typingSchema = z.object({ conversationId: z.string().regex(/^[a-f\d]{24}$/i), isTyping: z.boolean() });
 
-export type PublicUser = { id: string; name: string; username: string; email: string; avatarUrl?: string; online: boolean; lastSeen?: string };
+export type PublicUser = { id: string; name: string; username: string; avatarUrl?: string; online: boolean; lastSeen?: string };
+export type AccountUser = PublicUser & { email: string };
 export type MessageDto = { id: string; conversationId: string; senderId: string; text: string; type: "text"; status: "sent" | "delivered" | "read"; createdAt: string };
 export type ConversationDto = { id: string; participants: PublicUser[]; lastMessage?: MessageDto; lastMessageAt?: string; updatedAt: string };

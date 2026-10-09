@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import type { PublicUser } from "@secure-chat/shared";
 import { api } from "../api";
 import { Avatar } from "./Avatar";
+import { ErrorBanner } from "./States";
 
 interface UserSearchProps {
   onSelectUser: (user: PublicUser) => void;
@@ -11,10 +12,14 @@ export function UserSearch({ onSelectUser }: UserSearchProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PublicUser[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const debounceTimer = useRef<number>();
+  const searchRequestId = useRef(0);
 
   const handleInputChange = (val: string) => {
+    const requestId = ++searchRequestId.current;
     setQuery(val);
+    setError("");
     window.clearTimeout(debounceTimer.current);
 
     if (!val.trim()) {
@@ -27,18 +32,23 @@ export function UserSearch({ onSelectUser }: UserSearchProps) {
     debounceTimer.current = window.setTimeout(async () => {
       try {
         const response = await api.search(val);
-        setResults(response.users);
-      } catch {
-        setResults([]);
+        if (requestId === searchRequestId.current) setResults(response.users);
+      } catch (err) {
+        if (requestId === searchRequestId.current) {
+          setResults([]);
+          setError(err instanceof Error ? err.message : "User search failed");
+        }
       } finally {
-        setLoading(false);
+        if (requestId === searchRequestId.current) setLoading(false);
       }
     }, 250);
   };
 
   const handleSelect = (user: PublicUser) => {
+    searchRequestId.current += 1;
     setQuery("");
     setResults([]);
+    setError("");
     onSelectUser(user);
   };
 
@@ -63,6 +73,8 @@ export function UserSearch({ onSelectUser }: UserSearchProps) {
           </button>
         )}
       </div>
+
+      {error && <ErrorBanner message={error} />}
 
       {loading && (
         <div className="search-status muted small">
@@ -90,7 +102,7 @@ export function UserSearch({ onSelectUser }: UserSearchProps) {
         </div>
       )}
 
-      {query.trim().length > 0 && !loading && results.length === 0 && (
+      {query.trim().length > 0 && !loading && !error && results.length === 0 && (
         <div className="search-status muted small">
           No users found matching "{query}"
         </div>

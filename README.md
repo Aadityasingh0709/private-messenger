@@ -26,13 +26,13 @@ Socket.IO authenticates from the same HttpOnly cookie. Events: `conversation:joi
 
 ## Data model
 
-- **User**: identity/profile fields, Argon2 password hash, presence and last-seen timestamp.
+- **User**: identity/profile fields, Argon2 password hash, presence and last-seen timestamp. Email addresses are returned only for the authenticated user's own account, not in search results or conversation participant data.
 - **Conversation**: exactly two participants, optional latest-message reference and timestamp.
 - **Message**: conversation and sender references, text, status, and a current `type: "text"` field. The type is intentionally the narrow extension point for future media message types.
 
 ## Known Phase 1 limits
 
-- No end-to-end encryption, media uploads, push notifications, pagination, email verification, password recovery, or message deletion/editing.
+- No end-to-end encryption, media uploads, push notifications, paginated history (only the newest 200 messages are returned), email verification, password recovery, or message deletion/editing.
 - Read status is recorded when the participant loads a conversation. Socket-delivered messages show `sent`; a richer delivery/read receipt flow belongs in a later refinement.
 - HttpOnly cookie auth assumes the web app and API are configured with compatible HTTPS/CORS settings in production.
 

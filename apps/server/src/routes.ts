@@ -4,7 +4,7 @@ import { Types } from "mongoose";
 import { conversationSchema, loginSchema, registerSchema } from "@secure-chat/shared";
 import { cookieOptions, requireAuth, signToken, type AuthRequest } from "./auth.js";
 import { Conversation, Message, User } from "./models.js";
-import { conversationDto, messageDto, userDto } from "./serializers.js";
+import { accountDto, conversationDto, messageDto, userDto } from "./serializers.js";
 
 // Helper for Zod request validation
 const parse = <T>(schema: { safeParse: (value: unknown) => any }, value: unknown, res: Response): T | undefined => {
@@ -21,6 +21,12 @@ const ownConversation = async (id: string, userId: string) => {
   if (!Types.ObjectId.isValid(id)) return null;
   return Conversation.findOne({ _id: id, participants: userId });
 };
+
+const conversationKey = (firstUserId: string, secondUserId: string) =>
+  [firstUserId, secondUserId].sort().join(":");
+
+const isDuplicateKeyError = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "code" in error && error.code === 11000;
 
 // ==========================================
 // Authentication Routes (/api/auth)
@@ -49,8 +55,11 @@ authRouter.post("/register", async (req, res, next) => {
     });
 
     const token = signToken(String(user._id));
-    res.cookie("token", token, cookieOptions).status(201).json({ user: userDto(user) });
+    res.cookie("token", token, cookieOptions).status(201).json({ user: accountDto(user) });
   } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      return res.status(409).json({ error: "Email or username is already in use" });
+    }
     next(err);
   }
 });
@@ -67,7 +76,7 @@ authRouter.post("/login", async (req, res, next) => {
     }
 
     const token = signToken(String(user._id));
-    res.cookie("token", token, cookieOptions).json({ user: userDto(user) });
+    res.cookie("token", token, cookieOptions).json({ user: accountDto(user) });
   } catch (err) {
     next(err);
   }
@@ -89,7 +98,7 @@ apiRouter.get("/me", async (req: AuthRequest, res, next) => {
   try {
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ user: userDto(user) });
+    res.json({ user: accountDto(user) });
   } catch (err) {
     next(err);
   }
@@ -145,16 +154,36 @@ apiRouter.post("/conversations", async (req: AuthRequest, res, next) => {
       return res.status(404).json({ error: "Recipient user not found" });
     }
 
-    let conversation = await Conversation.findOne({
-      participants: { $all: [req.userId, data.userId], $size: 2 }
-    });
+    const participantKey = conversationKey(req.userId!, data.userId);
+    let conversation = await Conversation.findOne({ participantKey });
 
     if (!conversation) {
-      conversation = await Conversation.create({
-        participants: [req.userId, data.userId]
+      conversation = await Conversation.findOne({
+        participants: { $all: [req.userId, data.userId], $size: 2 }
       });
+
+      if (conversation) {
+        try {
+          conversation.participantKey = participantKey;
+          await conversation.save();
+        } catch (err) {
+          if (!isDuplicateKeyError(err)) throw err;
+          conversation = await Conversation.findOne({ participantKey });
+        }
+      } else {
+        try {
+          conversation = await Conversation.create({
+            participants: [req.userId, data.userId],
+            participantKey
+          });
+        } catch (err) {
+          if (!isDuplicateKeyError(err)) throw err;
+          conversation = await Conversation.findOne({ participantKey });
+        }
+      }
     }
 
+    if (!conversation) throw new Error("Conversation creation did not produce a conversation");
     await conversation.populate("participants");
     res.status(201).json({ conversation: conversationDto(conversation) });
   } catch (err) {
@@ -171,8 +200,9 @@ apiRouter.get("/conversations/:id/messages", async (req: AuthRequest, res, next)
     }
 
     const messages = await Message.find({ conversationId: conversation._id })
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(200);
+    messages.reverse();
 
     // Mark unread messages sent by others as read
     await Message.updateMany(
