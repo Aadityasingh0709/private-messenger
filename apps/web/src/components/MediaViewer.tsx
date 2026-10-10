@@ -22,7 +22,7 @@ export function MediaViewer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Focus close button on open, handle Escape key
+  // Focus close button on open, handle Escape key, reset state on mediaUrl change
   useEffect(() => {
     if (!isOpen) return;
 
@@ -41,14 +41,19 @@ export function MediaViewer({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, mediaUrl, onClose]);
 
-  // Pause playback when closed
+  // Pause playback when closed or unmounted
   useEffect(() => {
     if (!isOpen && videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
     }
+    return () => {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;

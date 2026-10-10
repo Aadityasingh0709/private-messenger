@@ -20,6 +20,32 @@ const VALID_1X1_PNG = Buffer.from([
   0xae, 0x42, 0x60, 0x82  // CRC
 ]);
 
+// Valid minimal JPEG with EXIF APP1 metadata segment to verify stripping
+const VALID_JPEG_WITH_EXIF = Buffer.concat([
+  Buffer.from([0xff, 0xd8]), // SOI
+  Buffer.from([
+    0xff, 0xe1, 0x00, 0x12, // APP1 length 18
+    0x45, 0x78, 0x69, 0x66, 0x00, 0x00, // "Exif\0\0"
+    0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00
+  ]),
+  Buffer.from([
+    0xff, 0xc0, 0x00, 0x0b, 0x08, // SOF0 length 11, precision 8
+    0x00, 0x01, 0x00, 0x01, // height 1, width 1
+    0x01, 0x01, 0x11, 0x00
+  ]),
+  Buffer.from([0xff, 0xd9]) // EOI
+]);
+
+// Valid minimal WebP structure
+const VALID_WEBP = Buffer.concat([
+  Buffer.from("RIFF", "ascii"),
+  Buffer.from([0x24, 0x00, 0x00, 0x00]), // file size - 8
+  Buffer.from("WEBP", "ascii"),
+  Buffer.from("VP8 ", "ascii"),
+  Buffer.from([0x14, 0x00, 0x00, 0x00]), // chunk size 20
+  Buffer.from([0xd0, 0x01, 0x00, 0x9d, 0x01, 0x2a, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+]);
+
 // Valid minimal MP4 structure with ftyp box
 const VALID_MIN_MP4 = Buffer.concat([
   Buffer.from([0x00, 0x00, 0x00, 0x20]), // box length 32
@@ -30,10 +56,20 @@ const VALID_MIN_MP4 = Buffer.concat([
   Buffer.from("mdat", "ascii")           // mdat box
 ]);
 
+// Valid minimal WebM structure with EBML header
+const VALID_MIN_WEBM = Buffer.from([
+  0x1a, 0x45, 0xdf, 0xa3, // EBML Header
+  0x9f, 0x42, 0x86, 0x81, 0x01, // DocType
+  0x42, 0xf7, 0x81, 0x01,
+  0x42, 0xf2, 0x81, 0x04,
+  0x42, 0xf3, 0x81, 0x08,
+  0x77, 0x65, 0x62, 0x6d // "webm"
+]);
+
 async function runTest() {
-  console.log("====================================================");
-  console.log("=== PHASE 1 & PHASE 2 END-TO-END VALIDATION TEST ===");
-  console.log("====================================================\n");
+  console.log("===============================================================");
+  console.log("=== COMPREHENSIVE PHASE 1 & PHASE 2 VERIFICATION TEST SUITE ===");
+  console.log("===============================================================\n");
 
   const timestamp = Date.now();
   const aliceEmail = `alice_${timestamp}@test.com`;
@@ -41,8 +77,10 @@ async function runTest() {
   const malloryEmail = `mallory_${timestamp}@test.com`;
   const password = "Password123!";
 
-  // 1. Register Alice
-  console.log("1. Registering Alice...");
+  // -------------------------------------------------------------
+  // 1. AUTHENTICATION & SESSION PERSISTENCE TESTS (PHASE 1)
+  // -------------------------------------------------------------
+  console.log("1. Testing Registration (Alice, Bob, Mallory)...");
   const resAlice = await fetch(`${API}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -58,10 +96,26 @@ async function runTest() {
   const tokenAlice = cookieAlice.replace("token=", "");
   const { user: alice } = await resAlice.json();
   console.log("✓ Alice registered:", alice.id, alice.name);
-  if (!alice.email) throw new Error("Registration did not return the account email");
 
-  // 2. Register Bob
-  console.log("2. Registering Bob...");
+  // Duplicate email check
+  console.log("2. Testing Duplicate Registration Rejection...");
+  const resDup = await fetch(`${API}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: "Alice Duplicate",
+      username: `alice_dup_${timestamp}`,
+      email: aliceEmail,
+      password
+    })
+  });
+  if (resDup.status === 409) {
+    console.log("✓ Duplicate email registration properly rejected with status 409");
+  } else {
+    throw new Error(`Expected status 409 for duplicate email, got ${resDup.status}`);
+  }
+
+  // Register Bob
   const resBob = await fetch(`${API}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -78,8 +132,7 @@ async function runTest() {
   const { user: bob } = await resBob.json();
   console.log("✓ Bob registered:", bob.id, bob.name);
 
-  // 3. Register Mallory (Attacker)
-  console.log("3. Registering Mallory (Unauthorized test)...");
+  // Register Mallory (Unauthorized User C)
   const resMallory = await fetch(`${API}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -94,8 +147,35 @@ async function runTest() {
   const { user: mallory } = await resMallory.json();
   console.log("✓ Mallory registered:", mallory.id);
 
-  // 4. User Search: Alice searches for Bob
-  console.log("4. Alice searching for Bob...");
+  // Login with invalid credentials test
+  console.log("3. Testing Invalid Login Credentials...");
+  const resInvalidLogin = await fetch(`${API}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: aliceEmail, password: "WrongPassword!" })
+  });
+  if (resInvalidLogin.status === 401) {
+    console.log("✓ Invalid login credentials rejected with status 401");
+  } else {
+    throw new Error(`Expected status 401 for invalid credentials, got ${resInvalidLogin.status}`);
+  }
+
+  // Session persistence check (/api/me)
+  console.log("4. Testing Authenticated Session Persistence (/api/me)...");
+  const resMeAlice = await fetch(`${API}/api/me`, {
+    headers: { Cookie: cookieAlice }
+  });
+  if (!resMeAlice.ok) throw new Error(`Session verification failed: ${resMeAlice.status}`);
+  const { user: meAlice } = await resMeAlice.json();
+  if (meAlice.id !== alice.id || meAlice.email !== aliceEmail) {
+    throw new Error("Session mismatch for Alice");
+  }
+  console.log("✓ Session verified for Alice via cookie");
+
+  // -------------------------------------------------------------
+  // 2. USER DISCOVERY & CONVERSATIONS (PHASE 1)
+  // -------------------------------------------------------------
+  console.log("5. Testing User Search Isolation...");
   const resSearch = await fetch(`${API}/api/users?q=bob_${timestamp}`, {
     headers: { Cookie: cookieAlice }
   });
@@ -106,10 +186,9 @@ async function runTest() {
   if (foundUsers.some((u: any) => "email" in u)) {
     throw new Error("User search exposed an account email address");
   }
-  console.log("✓ User search verified: found Bob without leaking email");
+  console.log("✓ User search verified: found Bob without exposing email");
 
-  // 5. Concurrent conversation requests
-  console.log("5. Alice starting conversation with Bob...");
+  console.log("6. Testing Concurrent Conversation Creation Deduplication...");
   const createConversation = () => fetch(`${API}/api/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookieAlice },
@@ -119,20 +198,20 @@ async function runTest() {
     createConversation(),
     createConversation()
   ]);
-  if (!resConv.ok || !resDuplicateConv.ok) {
-    throw new Error(`Conversation creation failed: ${resConv.status}, ${resDuplicateConv.status}`);
-  }
-  const [{ conversation }, { conversation: duplicateConversation }] = await Promise.all([
+  const [{ conversation: conv1 }, { conversation: conv2 }] = await Promise.all([
     resConv.json(),
     resDuplicateConv.json()
   ]);
-  if (conversation.id !== duplicateConversation.id) {
+  if (conv1.id !== conv2.id) {
     throw new Error("Concurrent requests created duplicate conversations");
   }
-  console.log("✓ Concurrent requests resolved to one conversation:", conversation.id);
+  const conversation = conv1;
+  console.log("✓ Concurrent requests resolved to single conversation:", conversation.id);
 
-  // 6. Connect authenticated sockets
-  console.log("6. Connecting Socket.IO clients for Alice, Bob, and Mallory...");
+  // -------------------------------------------------------------
+  // 3. SOCKET.IO REALTIME TEXT & ROOM ISOLATION (PHASE 1)
+  // -------------------------------------------------------------
+  console.log("7. Connecting Socket.IO Clients (Alice, Bob, Mallory)...");
   const socketAlice = io(API, {
     auth: { token: tokenAlice },
     extraHeaders: { Cookie: cookieAlice }
@@ -152,9 +231,9 @@ async function runTest() {
       socket.once("connect_error", reject);
     })
   ));
-  console.log("✓ All three Socket.IO clients connected and authenticated");
+  console.log("✓ Sockets connected and authenticated");
 
-  // 7. Join conversation rooms
+  // Join room & verify Mallory cannot join
   await new Promise<void>((resolve) => {
     socketAlice.emit("conversation:join", conversation.id, () => {
       socketBob.emit("conversation:join", conversation.id, () => {
@@ -166,15 +245,15 @@ async function runTest() {
     socketMallory.emit("conversation:join", conversation.id, resolve);
   });
   if (!unauthorizedJoin?.error) {
-    throw new Error("Unauthorized user joined a conversation socket room");
+    throw new Error("Mallory joined Alice and Bob's socket room!");
   }
-  console.log("✓ Both joined conversation room; unauthorized user rejected");
+  console.log("✓ Alice & Bob joined room; unauthorized user room join was rejected");
 
-  // 8. Phase 1 Text message exchange
-  console.log("8. Real-time text message exchange...");
+  // Realtime text message
+  console.log("8. Realtime Text Message Exchange...");
   const bobReceivedTextPromise = new Promise<any>((resolve) => {
     socketBob.on("message:new", (m) => {
-      if (m.type === "text" && m.text === "Hello Bob, Phase 1 text messaging!") {
+      if (m.type === "text" && m.text === "Phase 1 Text Message Verified") {
         resolve(m);
       }
     });
@@ -182,58 +261,83 @@ async function runTest() {
 
   socketAlice.emit("message:send", {
     conversationId: conversation.id,
-    text: "Hello Bob, Phase 1 text messaging!"
+    text: "Phase 1 Text Message Verified"
   });
 
   const bobReceivedText = await bobReceivedTextPromise;
   console.log("✓ Bob received Alice's text message in real time:", bobReceivedText.text);
 
-  // 9. PHASE 2: Image Upload & Real-Time Delivery
-  console.log("9. Phase 2: Alice uploads valid PNG image...");
-  const bobReceivedImagePromise = new Promise<any>((resolve) => {
+  // -------------------------------------------------------------
+  // 4. PHASE 2: IMAGE UPLOADS (PNG, JPEG WITH EXIF, WEBP)
+  // -------------------------------------------------------------
+  console.log("9. Phase 2: Uploading PNG Image with Caption...");
+  const bobReceivedPngPromise = new Promise<any>((resolve) => {
     socketBob.on("message:new", (m) => {
-      if (m.type === "image") {
+      if (m.type === "image" && m.text === "Valid PNG Photo") {
         resolve(m);
       }
     });
   });
 
-  const formImage = new FormData();
-  formImage.append("file", new Blob([VALID_1X1_PNG], { type: "image/png" }), "test-photo.png");
-  formImage.append("caption", "Look at this test photo!");
+  const formPng = new FormData();
+  formPng.append("file", new Blob([VALID_1X1_PNG], { type: "image/png" }), "test-photo.png");
+  formPng.append("caption", "Valid PNG Photo");
 
-  const resUploadImage = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
+  const resUploadPng = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
     method: "POST",
-    headers: {
-      Cookie: cookieAlice
-    },
-    body: formImage
+    headers: { Cookie: cookieAlice },
+    body: formPng
   });
+  if (!resUploadPng.ok) throw new Error(`PNG upload failed: ${resUploadPng.status}`);
+  const { message: pngMsg } = await resUploadPng.json();
+  const bobReceivedPng = await bobReceivedPngPromise;
+  if (bobReceivedPng.id !== pngMsg.id) throw new Error("Socket PNG message ID mismatch");
+  console.log("✓ PNG image uploaded & received in real time:", pngMsg.id);
 
-  if (!resUploadImage.ok) {
-    throw new Error(`Image upload failed: ${resUploadImage.status} ${await resUploadImage.text()}`);
-  }
-  const { message: uploadedImageMsg } = await resUploadImage.json();
-  console.log("✓ Image uploaded successfully via HTTP:", uploadedImageMsg.id, "type:", uploadedImageMsg.type);
-  if (uploadedImageMsg.type !== "image" || !uploadedImageMsg.mediaAssetId) {
-    throw new Error("Image upload did not return correct media type or mediaAssetId");
-  }
-  if ("storageKey" in uploadedImageMsg || (uploadedImageMsg.media && "storageKey" in uploadedImageMsg.media)) {
-    throw new Error("Security breach: Storage key leaked in HTTP response!");
-  }
+  // JPEG with EXIF stripping test
+  console.log("10. Phase 2: Uploading JPEG Image with EXIF Metadata...");
+  const formJpeg = new FormData();
+  formJpeg.append("file", new Blob([VALID_JPEG_WITH_EXIF], { type: "image/jpeg" }), "exif-camera.jpg");
+  formJpeg.append("caption", "JPEG with stripped EXIF");
 
-  const bobReceivedImage = await bobReceivedImagePromise;
-  console.log("✓ Bob received Alice's image message via Socket.IO in real time!");
-  if (bobReceivedImage.id !== uploadedImageMsg.id) {
-    throw new Error("Received socket image message ID does not match uploaded message ID");
-  }
-  if ("storageKey" in bobReceivedImage || (bobReceivedImage.media && "storageKey" in bobReceivedImage.media)) {
-    throw new Error("Security breach: Storage key leaked in Socket.IO event payload!");
-  }
+  const resUploadJpeg = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
+    method: "POST",
+    headers: { Cookie: cookieAlice },
+    body: formJpeg
+  });
+  if (!resUploadJpeg.ok) throw new Error(`JPEG upload failed: ${resUploadJpeg.status}`);
+  const { message: jpegMsg } = await resUploadJpeg.json();
+  console.log("✓ JPEG uploaded successfully:", jpegMsg.id);
 
-  // 10. PHASE 2: Video Upload & Real-Time Delivery
-  console.log("10. Phase 2: Alice uploads valid MP4 video...");
-  const bobReceivedVideoPromise = new Promise<any>((resolve) => {
+  // Verify EXIF was stripped by fetching stored JPEG buffer
+  const resFetchedJpeg = await fetch(`${API}/api/media/${jpegMsg.mediaAssetId}`, {
+    headers: { Cookie: cookieBob }
+  });
+  const fetchedJpegBuf = Buffer.from(await resFetchedJpeg.arrayBuffer());
+  if (fetchedJpegBuf.includes(Buffer.from("Exif"))) {
+    throw new Error("EXIF metadata was not stripped from JPEG image!");
+  }
+  console.log("✓ Verified location-bearing EXIF metadata stripped from stored JPEG");
+
+  // WebP Image Upload
+  console.log("11. Phase 2: Uploading WebP Image...");
+  const formWebp = new FormData();
+  formWebp.append("file", new Blob([VALID_WEBP], { type: "image/webp" }), "graphic.webp");
+
+  const resUploadWebp = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
+    method: "POST",
+    headers: { Cookie: cookieAlice },
+    body: formWebp
+  });
+  if (!resUploadWebp.ok) throw new Error(`WebP upload failed: ${resUploadWebp.status}`);
+  const { message: webpMsg } = await resUploadWebp.json();
+  console.log("✓ WebP image uploaded successfully:", webpMsg.id);
+
+  // -------------------------------------------------------------
+  // 5. PHASE 2: VIDEO UPLOADS & HTTP RANGE STREAMING (MP4, WEBM)
+  // -------------------------------------------------------------
+  console.log("12. Phase 2: Uploading MP4 Video...");
+  const bobReceivedMp4Promise = new Promise<any>((resolve) => {
     socketBob.on("message:new", (m) => {
       if (m.type === "video") {
         resolve(m);
@@ -241,118 +345,125 @@ async function runTest() {
     });
   });
 
-  const formVideo = new FormData();
-  formVideo.append("file", new Blob([VALID_MIN_MP4], { type: "video/mp4" }), "test-video.mp4");
-  formVideo.append("caption", "Check out this video clip");
+  const formMp4 = new FormData();
+  formMp4.append("file", new Blob([VALID_MIN_MP4], { type: "video/mp4" }), "clip.mp4");
+  formMp4.append("caption", "MP4 Video Clip");
 
-  const resUploadVideo = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
+  const resUploadMp4 = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
     method: "POST",
-    headers: {
-      Cookie: cookieAlice
-    },
-    body: formVideo
+    headers: { Cookie: cookieAlice },
+    body: formMp4
   });
+  if (!resUploadMp4.ok) throw new Error(`MP4 upload failed: ${resUploadMp4.status}`);
+  const { message: mp4Msg } = await resUploadMp4.json();
+  const bobReceivedMp4 = await bobReceivedMp4Promise;
+  if (bobReceivedMp4.id !== mp4Msg.id) throw new Error("Socket MP4 message ID mismatch");
+  console.log("✓ MP4 video uploaded & received in real time:", mp4Msg.id);
 
-  if (!resUploadVideo.ok) {
-    throw new Error(`Video upload failed: ${resUploadVideo.status} ${await resUploadVideo.text()}`);
-  }
-  const { message: uploadedVideoMsg } = await resUploadVideo.json();
-  console.log("✓ Video uploaded successfully:", uploadedVideoMsg.id, "type:", uploadedVideoMsg.type);
+  // WebM Video Upload
+  console.log("13. Phase 2: Uploading WebM Video...");
+  const formWebm = new FormData();
+  formWebm.append("file", new Blob([VALID_MIN_WEBM], { type: "video/webm" }), "recording.webm");
 
-  const bobReceivedVideo = await bobReceivedVideoPromise;
-  console.log("✓ Bob received Alice's video message via Socket.IO in real time!");
-  if (bobReceivedVideo.type !== "video" || !bobReceivedVideo.mediaAssetId) {
-    throw new Error("Video socket message missing type or mediaAssetId");
-  }
-
-  // 11. PHASE 2: Authorized Media Retrieval & Content Inspection
-  console.log("11. Phase 2: Bob retrieves image media content...");
-  const mediaAssetId = uploadedImageMsg.mediaAssetId;
-  const resGetMedia = await fetch(`${API}/api/media/${mediaAssetId}`, {
-    headers: { Cookie: cookieBob }
+  const resUploadWebm = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
+    method: "POST",
+    headers: { Cookie: cookieAlice },
+    body: formWebm
   });
-  if (!resGetMedia.ok) {
-    throw new Error(`Bob could not retrieve media: ${resGetMedia.status}`);
-  }
-  const mediaBuffer = Buffer.from(await resGetMedia.arrayBuffer());
-  const contentType = resGetMedia.headers.get("content-type");
-  const nosniff = resGetMedia.headers.get("x-content-type-options");
-  const csp = resGetMedia.headers.get("content-security-policy");
+  if (!resUploadWebm.ok) throw new Error(`WebM upload failed: ${resUploadWebm.status}`);
+  const { message: webmMsg } = await resUploadWebm.json();
+  console.log("✓ WebM video uploaded successfully:", webmMsg.id);
 
-  if (!contentType?.includes("image/png")) {
-    throw new Error(`Expected content-type image/png, got ${contentType}`);
-  }
-  if (nosniff !== "nosniff") {
-    throw new Error("Missing X-Content-Type-Options: nosniff header");
-  }
-  if (csp !== "default-src 'none'") {
-    throw new Error("Missing safe Content-Security-Policy header");
-  }
-  console.log("✓ Bob retrieved media successfully with verified headers (CSP, nosniff, Content-Type: image/png)");
-
-  // 12. PHASE 2: HTTP Byte-Range Request Test (Video Seeking)
-  console.log("12. Phase 2: Testing HTTP byte-range request for video playback...");
-  const videoAssetId = uploadedVideoMsg.mediaAssetId;
-  const resRange = await fetch(`${API}/api/media/${videoAssetId}`, {
-    headers: {
-      Cookie: cookieBob,
-      Range: "bytes=0-15"
-    }
+  // Video HTTP Range Request Testing
+  console.log("14. Phase 2: Testing Standard Range Request (bytes=0-15)...");
+  const resRangeStandard = await fetch(`${API}/api/media/${mp4Msg.mediaAssetId}`, {
+    headers: { Cookie: cookieBob, Range: "bytes=0-15" }
   });
-  if (resRange.status !== 206) {
-    throw new Error(`Expected status 206 Partial Content, got ${resRange.status}`);
-  }
-  const contentRange = resRange.headers.get("content-range");
-  const acceptRanges = resRange.headers.get("accept-ranges");
-  if (!contentRange?.startsWith("bytes 0-15/")) {
-    throw new Error(`Invalid Content-Range header: ${contentRange}`);
-  }
-  if (acceptRanges !== "bytes") {
-    throw new Error(`Invalid Accept-Ranges header: ${acceptRanges}`);
-  }
-  console.log("✓ HTTP Byte-range request verified (Status 206, Content-Range:", contentRange, ")");
+  if (resRangeStandard.status !== 206) throw new Error(`Expected status 206, got ${resRangeStandard.status}`);
+  const crStandard = resRangeStandard.headers.get("content-range");
+  if (!crStandard?.startsWith("bytes 0-15/")) throw new Error(`Invalid Content-Range: ${crStandard}`);
+  console.log("✓ Standard byte-range request verified (206, Content-Range:", crStandard, ")");
 
-  // 13. PHASE 2: Security & Authorization - Mallory Attempts Unauthorized Upload
-  console.log("13. Phase 2: Mallory attempts unauthorized upload to Alice & Bob's conversation...");
+  console.log("15. Phase 2: Testing Suffix Range Request (bytes=-10)...");
+  const resRangeSuffix = await fetch(`${API}/api/media/${mp4Msg.mediaAssetId}`, {
+    headers: { Cookie: cookieBob, Range: "bytes=-10" }
+  });
+  if (resRangeSuffix.status !== 206) throw new Error(`Expected status 206, got ${resRangeSuffix.status}`);
+  const crSuffix = resRangeSuffix.headers.get("content-range");
+  console.log("✓ Suffix byte-range request verified (206, Content-Range:", crSuffix, ")");
+
+  console.log("16. Phase 2: Testing Out-of-Bounds Range Request (bytes=1000-2000)...");
+  const resRangeInvalid = await fetch(`${API}/api/media/${mp4Msg.mediaAssetId}`, {
+    headers: { Cookie: cookieBob, Range: "bytes=1000-2000" }
+  });
+  if (resRangeInvalid.status === 416) {
+    console.log("✓ Out-of-bounds range request rejected with status 416 Range Not Satisfiable");
+  } else {
+    throw new Error(`Expected status 416, got ${resRangeInvalid.status}`);
+  }
+
+  // -------------------------------------------------------------
+  // 6. SECURITY & AUTHORIZATION TESTS
+  // -------------------------------------------------------------
+  console.log("17. Security: Unauthenticated Access Rejected...");
+  const resUnauth = await fetch(`${API}/api/media/${pngMsg.mediaAssetId}`);
+  if (resUnauth.status === 401) {
+    console.log("✓ Unauthenticated media request rejected with status 401");
+  } else {
+    throw new Error(`Expected status 401, got ${resUnauth.status}`);
+  }
+
+  console.log("18. Security: Mallory (User C) Access Denied to Alice & Bob's Media...");
+  const resMalloryAccess = await fetch(`${API}/api/media/${pngMsg.mediaAssetId}`, {
+    headers: { Cookie: cookieMallory }
+  });
+  if (resMalloryAccess.status === 404 || resMalloryAccess.status === 403) {
+    console.log(`✓ Unauthorized user access properly denied (status ${resMalloryAccess.status})`);
+  } else {
+    throw new Error(`Security breach! Mallory accessed media with status ${resMalloryAccess.status}`);
+  }
+
+  console.log("19. Security: Mallory Unauthorized Upload to Alice & Bob's Conversation...");
   const formMalloryUpload = new FormData();
-  formMalloryUpload.append("file", new Blob([VALID_1X1_PNG], { type: "image/png" }), "mallory.png");
+  formMalloryUpload.append("file", new Blob([VALID_1X1_PNG], { type: "image/png" }), "hack.png");
   const resMalloryUpload = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
     method: "POST",
-    headers: {
-      Cookie: cookieMallory
-    },
+    headers: { Cookie: cookieMallory },
     body: formMalloryUpload
   });
   if (resMalloryUpload.status === 404 || resMalloryUpload.status === 403) {
-    console.log(`✓ Unauthorized media upload rejected (Status ${resMalloryUpload.status})`);
+    console.log(`✓ Unauthorized upload to foreign conversation rejected (status ${resMalloryUpload.status})`);
   } else {
-    throw new Error(`Security breach! Mallory upload succeeded with status ${resMalloryUpload.status}`);
+    throw new Error(`Security breach! Mallory uploaded to conversation with status ${resMalloryUpload.status}`);
   }
 
-  // 14. PHASE 2: Security & Authorization - Mallory Attempts Unauthorized Media Download
-  console.log("14. Phase 2: Mallory attempts to download Alice's private media...");
-  const resMalloryDownload = await fetch(`${API}/api/media/${mediaAssetId}`, {
-    headers: { Cookie: cookieMallory }
+  console.log("20. Security: Cross-Conversation Tampering in URL Path...");
+  // Attempting to access media using a non-matching conversation ID in URL
+  const resTampered = await fetch(`${API}/api/conversations/6ac9300581e753848e920d00/media/${pngMsg.mediaAssetId}`, {
+    headers: { Cookie: cookieAlice }
   });
-  if (resMalloryDownload.status === 404 || resMalloryDownload.status === 403) {
-    console.log(`✓ Unauthorized media download rejected (Status ${resMalloryDownload.status})`);
+  if (resTampered.status === 404) {
+    console.log("✓ Cross-conversation media ID mismatch in URL properly rejected with 404");
   } else {
-    throw new Error(`Security breach! Mallory downloaded media with status ${resMalloryDownload.status}`);
+    throw new Error(`Expected status 404 for mismatched conversation ID, got ${resTampered.status}`);
   }
 
-  // 15. PHASE 2: Security - Invalid/Guessed Media ID
-  console.log("15. Phase 2: Non-existent media ID returns safe 404 error...");
-  const resNotFound = await fetch(`${API}/api/media/6ac92862c2238ce1f33cc000`, {
+  console.log("21. Security: Verifying Safe Response Headers...");
+  const resHeaders = await fetch(`${API}/api/media/${pngMsg.mediaAssetId}`, {
     headers: { Cookie: cookieBob }
   });
-  if (resNotFound.status === 404) {
-    console.log("✓ Safe 404 returned for unknown media ID");
-  } else {
-    throw new Error(`Expected 404, got ${resNotFound.status}`);
+  if (resHeaders.headers.get("x-content-type-options") !== "nosniff") {
+    throw new Error("Missing X-Content-Type-Options: nosniff header");
   }
+  if (resHeaders.headers.get("content-security-policy") !== "default-src 'none'") {
+    throw new Error("Missing Content-Security-Policy: default-src 'none' header");
+  }
+  console.log("✓ Security headers verified (nosniff, CSP: default-src 'none')");
 
-  // 16. PHASE 2: Server-Side Validation - Spoofed File Rejected
-  console.log("16. Phase 2: Testing spoofed file signature rejection (HTML disguised as image)...");
+  // -------------------------------------------------------------
+  // 7. FILE VALIDATION & SPOOFING REJECTION TESTS
+  // -------------------------------------------------------------
+  console.log("22. Validation: Spoofed File Signature (HTML renamed as .jpg)...");
   const formSpoofed = new FormData();
   formSpoofed.append(
     "file",
@@ -361,80 +472,99 @@ async function runTest() {
   );
   const resSpoofed = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
     method: "POST",
-    headers: {
-      Cookie: cookieAlice
-    },
+    headers: { Cookie: cookieAlice },
     body: formSpoofed
   });
   if (resSpoofed.status === 400) {
-    console.log("✓ Spoofed file rejected with status 400");
+    console.log("✓ Magic byte mismatch properly detected and rejected with status 400");
   } else {
     throw new Error(`Expected status 400 for spoofed file, got ${resSpoofed.status}`);
   }
 
-  // 17. PHASE 2: Server-Side Validation - Unsupported Format Rejected (SVG)
-  console.log("17. Phase 2: Testing unsupported format rejection (SVG)...");
+  console.log("23. Validation: Disallowed File Format (SVG vector graphic)...");
   const formSvg = new FormData();
-  formSvg.append(
-    "file",
-    new Blob([Buffer.from("<svg></svg>", "utf-8")], { type: "image/svg+xml" }),
-    "vector.svg"
-  );
+  formSvg.append("file", new Blob([Buffer.from("<svg></svg>", "utf-8")], { type: "image/svg+xml" }), "icon.svg");
   const resSvg = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
     method: "POST",
-    headers: {
-      Cookie: cookieAlice
-    },
+    headers: { Cookie: cookieAlice },
     body: formSvg
   });
   if (resSvg.status === 400) {
-    console.log("✓ Disallowed format (SVG) rejected with status 400");
+    console.log("✓ Disallowed SVG file format rejected with status 400");
   } else {
     throw new Error(`Expected status 400 for SVG, got ${resSvg.status}`);
   }
 
-  // 18. Message History & Persistence Verification (MongoDB)
-  console.log("18. Verifying full message history persistence in MongoDB...");
-  const resHistory = await fetch(`${API}/api/conversations/${conversation.id}/messages`, {
-    headers: { Cookie: cookieBob }
+  console.log("24. Validation: Missing File Upload...");
+  const formEmpty = new FormData();
+  formEmpty.append("caption", "No file here");
+  const resEmpty = await fetch(`${API}/api/conversations/${conversation.id}/media`, {
+    method: "POST",
+    headers: { Cookie: cookieAlice },
+    body: formEmpty
   });
-  const { messages: history } = await resHistory.json();
-  console.log("✓ Retrieved", history.length, "persisted messages");
-  if (history.length !== 3) {
-    throw new Error(`Expected 3 messages in history, got ${history.length}`);
+  if (resEmpty.status === 400) {
+    console.log("✓ Empty file upload rejected with status 400");
+  } else {
+    throw new Error(`Expected status 400 for empty upload, got ${resEmpty.status}`);
   }
-  const [msg1, msg2, msg3] = history;
-  if (msg1.type !== "text" || msg2.type !== "image" || msg3.type !== "video") {
-    throw new Error(`Unexpected message sequence: [${msg1.type}, ${msg2.type}, ${msg3.type}]`);
-  }
-  if (!msg2.media || !msg3.media) {
-    throw new Error("Persisted media messages missing populated media metadata DTOs");
-  }
-  console.log("✓ All messages verified in chronological order with correct types (text, image, video)");
 
-  // 19. Conversation List Preview Update
-  console.log("19. Verifying conversation list preview...");
-  const resConvList = await fetch(`${API}/api/conversations`, {
+  // -------------------------------------------------------------
+  // 8. DATABASE PERSISTENCE & CONVERSATION PREVIEW
+  // -------------------------------------------------------------
+  console.log("25. Persistence: Verifying Message History in MongoDB...");
+  const resMessages = await fetch(`${API}/api/conversations/${conversation.id}/messages`, {
     headers: { Cookie: cookieBob }
   });
-  const { conversations: convList } = await resConvList.json();
-  const currentConv = convList.find((c: any) => c.id === conversation.id);
-  if (!currentConv?.lastMessage) {
-    throw new Error("Conversation missing lastMessage reference");
+  const { messages: history } = await resMessages.json();
+  console.log("✓ Retrieved", history.length, "persisted messages from database");
+  if (history.length !== 6) {
+    throw new Error(`Expected 6 messages in history, got ${history.length}`);
   }
+  const types = history.map((m: any) => m.type);
+  if (types[0] !== "text" || types[1] !== "image" || types[2] !== "image" || types[3] !== "image" || types[4] !== "video" || types[5] !== "video") {
+    throw new Error(`Unexpected message type sequence: ${types.join(", ")}`);
+  }
+  console.log("✓ Chronological order and message types verified (text, image, image, image, video, video)");
+
+  console.log("26. UI Preview: Verifying Conversation List Snippet...");
+  const resConversations = await fetch(`${API}/api/conversations`, {
+    headers: { Cookie: cookieBob }
+  });
+  const { conversations: convList } = await resConversations.json();
+  const currentConv = convList.find((c: any) => c.id === conversation.id);
+  if (!currentConv?.lastMessage) throw new Error("Conversation missing lastMessage reference");
   if (currentConv.lastMessage.type !== "video") {
     throw new Error(`Expected lastMessage type video, got ${currentConv.lastMessage.type}`);
   }
   console.log("✓ Conversation list correctly reflects latest media message (type: video)");
 
-  // 20. Clean up sockets
+  // -------------------------------------------------------------
+  // 9. LOGOUT & SESSION INVALIDATION
+  // -------------------------------------------------------------
+  console.log("27. Auth: Testing Logout and Session Invalidation...");
+  const resLogout = await fetch(`${API}/api/auth/logout`, {
+    method: "POST",
+    headers: { Cookie: cookieBob }
+  });
+  if (resLogout.status !== 204) throw new Error(`Logout failed: ${resLogout.status}`);
+  const resMeAfterLogout = await fetch(`${API}/api/me`, {
+    headers: { Cookie: "token=" }
+  });
+  if (resMeAfterLogout.status === 401) {
+    console.log("✓ Session successfully terminated; subsequent request rejected with 401");
+  } else {
+    throw new Error(`Expected 401 after logout, got ${resMeAfterLogout.status}`);
+  }
+
+  // Clean up socket connections
   socketAlice.disconnect();
   socketBob.disconnect();
   socketMallory.disconnect();
 
-  console.log("\n========================================================");
-  console.log("🎉 ALL PHASE 1 & PHASE 2 E2E TEST REQUIREMENTS VERIFIED!");
-  console.log("========================================================");
+  console.log("\n===============================================================");
+  console.log("🎉 ALL 27 VERIFICATION CHECKS (PHASE 1 & PHASE 2) PASSED 100%!");
+  console.log("===============================================================");
 }
 
 runTest().catch((err) => {

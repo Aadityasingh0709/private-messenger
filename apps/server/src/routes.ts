@@ -325,7 +325,13 @@ apiRouter.post("/conversations/:id/media", uploadMiddleware, async (req: AuthReq
 });
 
 // Helper to serve private media securely with participant check & HTTP byte-range requests
-const serveMedia = async (mediaId: string, userId: string, req: Request, res: Response) => {
+const serveMedia = async (
+  mediaId: string,
+  userId: string,
+  req: Request,
+  res: Response,
+  expectedConversationId?: string
+) => {
   if (!Types.ObjectId.isValid(mediaId)) {
     return res.status(404).json({ error: "Media not found" });
   }
@@ -333,6 +339,13 @@ const serveMedia = async (mediaId: string, userId: string, req: Request, res: Re
   const asset = await MediaAsset.findById(mediaId).select("+storageKey");
   if (!asset) {
     return res.status(404).json({ error: "Media not found" });
+  }
+
+  // Cross-conversation validation: ensure media belongs to requested conversation
+  if (expectedConversationId) {
+    if (!Types.ObjectId.isValid(expectedConversationId) || String(asset.conversationId) !== expectedConversationId) {
+      return res.status(404).json({ error: "Media not found or access denied" });
+    }
   }
 
   // Strict authorization: user must be participant in the conversation
@@ -359,8 +372,22 @@ const serveMedia = async (mediaId: string, userId: string, req: Request, res: Re
       return;
     }
 
-    let start = match[1] ? parseInt(match[1], 10) : 0;
-    let end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
+    let start: number;
+    let end: number;
+
+    if (!match[1] && match[2]) {
+      // Suffix byte range: e.g. bytes=-50 (last 50 bytes)
+      const suffixLength = parseInt(match[2], 10);
+      if (isNaN(suffixLength) || suffixLength <= 0) {
+        res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
+        return;
+      }
+      start = Math.max(0, totalSize - suffixLength);
+      end = totalSize - 1;
+    } else {
+      start = match[1] ? parseInt(match[1], 10) : 0;
+      end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
+    }
 
     if (isNaN(start) || start >= totalSize || isNaN(end) || end < start) {
       res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
@@ -382,6 +409,9 @@ const serveMedia = async (mediaId: string, userId: string, req: Request, res: Re
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(asset.originalName)}"`);
 
     const stream = storage.createReadStream(asset.storageKey, { start, end });
+    res.on("close", () => {
+      stream.destroy();
+    });
     stream.on("error", () => {
       if (!res.headersSent) res.status(500).end();
     });
@@ -397,6 +427,9 @@ const serveMedia = async (mediaId: string, userId: string, req: Request, res: Re
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(asset.originalName)}"`);
 
     const stream = storage.createReadStream(asset.storageKey);
+    res.on("close", () => {
+      stream.destroy();
+    });
     stream.on("error", () => {
       if (!res.headersSent) res.status(500).end();
     });
@@ -407,7 +440,7 @@ const serveMedia = async (mediaId: string, userId: string, req: Request, res: Re
 // Retrieve media in the context of a conversation
 apiRouter.get("/conversations/:id/media/:mediaId", async (req: AuthRequest, res: Response, next) => {
   try {
-    await serveMedia(String(req.params.mediaId), req.userId!, req, res);
+    await serveMedia(String(req.params.mediaId), req.userId!, req, res, String(req.params.id));
   } catch (err) {
     next(err);
   }
